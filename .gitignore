@@ -1,0 +1,18 @@
+# 파이썬 가상환경 격리
+agent_env/
+venv/
+
+# 파이썬 캐시 및 실행 파일
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# 로컬 테스트용 이미지 파일 (깃허브 용량 방지 및 개인정보 보호)
+*.png
+*.jpg
+*.jpeg
+
+# 시스템 파일
+.DS_Store
