@@ -1,80 +1,102 @@
 import base64
-import os
-import time
 import re
-from langchain_ollama import OllamaLLM as Ollama
+import time
 import pyautogui
+from langchain_ollama import OllamaLLM as Ollama
+from langchain_core.messages import HumanMessage
+
 
 def capture_current_screen(filename="current_screen.png"):
-    print("-> 현재 화면을 캡처하는 중...")
+    print("-> 3초 후 캡처합니다. 토끼가 보이는 화면으로 전환하세요...")
+    time.sleep(3)
     screenshot = pyautogui.screenshot()
     screenshot.save(filename)
+    print("-> 캡처 완료!")
     return filename
+
 
 def encode_image(image_path):
     with open(image_path, "rb") as img_file:
-        return base64.b64encode(img_file.read()).decode('utf-8')
+        return base64.b64encode(img_file.read()).decode("utf-8")
 
-def execute_click_action(x, y):
-    print(f"-> [ACTION] AI의 지시에 따라 화면의 X: {x}, Y: {y} 좌표를 클릭합니다.")
-    pyautogui.moveTo(x, y, duration=1.0)
-    pyautogui.click()
+
+def move_to_target(x, y):
+    print(f"-> [ACTION] X: {x}, Y: {y} 로 마우스 이동")
+    pyautogui.moveTo(x, y, duration=1.5)
+
+
+def parse_coordinates(response: str):
+    x_match = re.search(r'CLICK_X\s*:\s*([0-1]?\.\d+)', response)
+    y_match = re.search(r'CLICK_Y\s*:\s*([0-1]?\.\d+)', response)
+
+    if x_match and y_match:
+        return float(x_match.group(1)), float(y_match.group(1))
+    return None, None
+
 
 def main():
-    print("=== 멀티모달 AI 에이전트 루프 시작 ===")
-    
+    print("=== 토끼 탐지 에이전트 시작 ===")
+
     image_path = capture_current_screen()
     base64_image = encode_image(image_path)
 
-    llm = Ollama(model="llava", num_predict=128)
-    
-    # 1. 프롬프트 강화: 다른 설명 섞지 말라고 엄격하게 제한
-    prompt = """
-    당신은 사용자의 화면을 제어하는 AI 에이전트입니다.
-    현재 화면 스크린샷을 분석하고, 가장 먼저 주목해야 하거나 클릭해야 할 중요한 요소를 하나만 골라주세요.
-    
-    [중요규칙]
-    사고 과정이나 부연 설명은 절대로 하지 마십시오. 오직 아래의 형식만 딱 두 줄 출력하고 답변을 끝내세요.
-    
-    CLICK_X: [정수값만 입력]
-    CLICK_Y: [정수값만 입력]
-    """
+    llm = Ollama(model="minicpm-v", num_predict=128, temperature=0.0)
 
-    print("AI 에이전트가 화면을 분석하고 다음 행동을 고민 중입니다...")
-    llm_with_image = llm.bind(images=[base64_image])
-    response = llm_with_image.invoke(prompt)
 
-    print("\n=== [AI Agent의 사고 과정 및 판단] ===")
+    prompt = """Look at this screenshot very carefully.
+
+There should be a rabbit (small furry animal with long ears) somewhere in the image.
+Find it and tell me its location.
+
+Output ONLY:
+FOUND: YES
+CLICK_X: [horizontal ratio 0.0~1.0, 0.0=left edge, 1.0=right edge]
+CLICK_Y: [vertical ratio 0.0~1.0, 0.0=top edge, 1.0=bottom edge]
+
+If absolutely no rabbit exists:
+FOUND: NO"""
+
+    message = HumanMessage(
+        content=[
+            {
+                "type": "image_url",
+                "image_url": f"data:image/png;base64,{base64_image}",
+            },
+            {"type": "text", "text": prompt},
+        ]
+    )
+
+    print("AI가 화면에서 토끼를 탐색 중...")
+    response = llm.invoke([message])
+
+    print("\n=== [AI 응답] ===")
     print(response)
-    print("======================================\n")
+    print("=================\n")
 
-    # 2. 파싱 로직 강화: 정규표현식으로 문장 속에서 숫자만 추출
     try:
-        click_x = None
-        click_y = None
-        
-        for line in response.split('\n'):
-            if "CLICK_X:" in line:
-                # 'CLICK_X:' 뒤에 나오는 문자열 중 숫자(\d+)만 추출
-                numbers = re.findall(r'\d+', line.split("CLICK_X:")[1])
-                if numbers:
-                    click_x = int(numbers[0])
-            if "CLICK_Y:" in line:
-                # 'CLICK_Y:' 뒤에 나오는 문자열 중 숫자(\d+)만 추출
-                numbers = re.findall(r'\d+', line.split("CLICK_Y:")[1])
-                if numbers:
-                    click_y = int(numbers[0])
+        # 토끼 발견 여부 확인
+        if "FOUND: NO" in response.upper():
+            print("[결과] 화면에서 토끼를 찾지 못했습니다.")
+            return
 
-        if click_x is not None and click_y is not None:
-            execute_click_action(click_x, click_y)
+        screen_width, screen_height = pyautogui.size()
+        click_x_ratio, click_y_ratio = parse_coordinates(response)
+
+        if click_x_ratio is not None and click_y_ratio is not None:
+            click_x_ratio = max(0.01, min(0.99, click_x_ratio))
+            click_y_ratio = max(0.01, min(0.99, click_y_ratio))
+
+            click_x = int(click_x_ratio * screen_width)
+            click_y = int(click_y_ratio * screen_height)
+
+            print(f"[결과] 토끼 발견! 비율({click_x_ratio:.3f}, {click_y_ratio:.3f}) → 픽셀({click_x}, {click_y})")
+            move_to_target(click_x, click_y)
         else:
-            print("[경고] AI 답변에서 구체적인 CLICK_X, CLICK_Y 좌표를 추출하지 못했습니다.")
-            
-    except Exception as e:
-        print(f"[오류 발생] 행동을 실행하는 중 문제가 발생했습니다: {e}")
+            print("[경고] 좌표 파싱 실패. AI 응답을 확인하세요.")
 
-    if os.path.exists(image_path):
-        os.remove(image_path)
+    except Exception as e:
+        print(f"[오류] {e}")
+
 
 if __name__ == "__main__":
     main()
